@@ -118,9 +118,9 @@ def ensure_multiple_of(value, multiple_of=14):
 
 
 def constrain_to_multiple_of(value, multiple_of=14, min_val=0, max_val=None):
-    target = int(np.round(value / multiple_of) * multiple_of)
+    target = int(np.floor(value / multiple_of) * multiple_of)
     if max_val is not None and target > max_val:
-        target = int(np.floor(value / multiple_of) * multiple_of)
+        target = int(np.floor(max_val / multiple_of) * multiple_of)
     if target < min_val:
         target = int(np.ceil(value / multiple_of) * multiple_of)
     return max(multiple_of, target)
@@ -172,7 +172,14 @@ def get_resized_size(width, height, input_size, resize_method, multiple_of=14):
 
 def resize_rgb_for_promptda(rgb, input_size, resize_method="upper_bound", multiple_of=14):
     height, width = rgb.shape[:2]
-    target_w, target_h = get_resized_size(width, height, input_size, resize_method, multiple_of)
+
+    if (resize_method == "upper_bound"
+            and input_size is not None and input_size > 0
+            and max(height, width) <= input_size):
+        target_h = ensure_multiple_of(height, multiple_of)
+        target_w = ensure_multiple_of(width, multiple_of)
+    else:
+        target_w, target_h = get_resized_size(width, height, input_size, resize_method, multiple_of)
 
     if target_h == height and target_w == width:
         return rgb
@@ -277,6 +284,13 @@ def inference(args):
                     resize_method=args.resize_method,
                 )
                 target_shape = load_gt_shape(gt_depth_path)
+
+                h_rgb, w_rgb = rgb_input.shape[:2]
+                if prompt_depth.shape[:2] != (h_rgb, w_rgb):
+                    prompt_depth = cv2.resize(
+                        prompt_depth, (w_rgb, h_rgb),
+                        interpolation=cv2.INTER_NEAREST,
+                    )
 
                 records.append(
                     {
