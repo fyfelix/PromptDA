@@ -1,0 +1,25 @@
+#!/bin/bash
+set -e
+
+if [ "$#" -lt 1 ]; then
+    echo "Usage: bash scripts/run_batch.sh <ckpt_directory> [dataset_jsonl] [camera_type]"
+    exit 1
+fi
+
+ROOT_DIR=$1
+DATASET_PATH=${2:-"data/HAMMER/test.jsonl"}
+CAMERA_TYPE=${3:-"d435"}
+
+echo "Processing checkpoints in ${ROOT_DIR}"
+
+shopt -s nullglob
+for ckpt in "$ROOT_DIR"/*.ckpt "$ROOT_DIR"/*.pt; do
+    if [ -f "$ckpt" ]; then
+        echo "=========================================================="
+        echo "Processing checkpoint: $ckpt"
+        bash scripts/run_bs.sh "$ckpt" "$DATASET_PATH" "$CAMERA_TYPE"
+        echo "=========================================================="
+    fi
+done
+
+echo "All batch jobs completed."

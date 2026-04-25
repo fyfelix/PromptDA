@@ -20,6 +20,7 @@ __pycache__/
 build/
 results/
 checkpoints/
+ckpts/
 data/
 develop-eggs/
 dist/
