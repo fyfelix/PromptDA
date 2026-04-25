@@ -64,7 +64,7 @@ class HAMMERDataset(Dataset):
                 self.data.append(json.loads(line))
 
         self.raw_type = raw_type
-        self.depth_range = self.data[0].get("depth-range", [0.01, 6.0])
+        self.depth_range = self.data[0].get("depth-range", [0.1, 6.0])
 
     def __len__(self):
         return len(self.data)
