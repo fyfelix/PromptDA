@@ -41,23 +41,30 @@ depth-range
 
 ## 运行
 
+先安装仓库根依赖，再安装评估脚本的补充依赖：
+
+```bash
+pip install -r requirements.txt
+pip install -r evaluation/requirements.txt
+```
+
 在仓库根目录执行：
 
 ```bash
-./evaluation/run_eval.sh /path/to/model.ckpt
+./evaluation/run_eval.sh
 ```
 
 完整位置参数：
 
 ```bash
-./evaluation/run_eval.sh <checkpoint_or_hf_model_id> [encoder=vitl] [raw_type=d435] [cleanup_npy=true]
+./evaluation/run_eval.sh [checkpoint_or_hf_model_id=ckpt/promptda_vitl.ckpt] [encoder=vitl] [raw_type=d435] [cleanup_npy=false]
 ```
 
 常用环境变量覆盖：
 
 ```bash
 DATASET_PATH=data/HAMMER/test.jsonl \
-OUTPUT_DIR=outputs/hammer_promptda_vitl_d435 \
+OUTPUT_DIR=evaluation/output \
 PYTHON_BIN=python3 \
 BATCH_SIZE=1 \
 NUM_WORKERS=0 \
@@ -80,7 +87,8 @@ all_metrics_<timestamp>_False.csv
 mean_metrics_<timestamp>_False.json
 ```
 
-设置 `SAVE_VIS=true` 可额外保存 RGB、prompt depth、prediction 的可视化 JPG。
+默认会保存 RGB、prompt depth、prediction 的可视化 JPG；设置 `SAVE_VIS=false`
+可关闭可视化输出。
 只有在明确希望把预测值 clamp 到 HAMMER `depth-range` 时，才设置
 `CLAMP_PREDICTION=true`。
 

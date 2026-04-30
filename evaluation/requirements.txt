@@ -1,0 +1,4 @@
+# Extra packages used by evaluation scripts.
+# Install after the repository-level requirements.txt.
+pandas
+loguru

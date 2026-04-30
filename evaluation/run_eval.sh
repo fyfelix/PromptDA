@@ -8,15 +8,15 @@ PYTHON_BIN="${PYTHON_BIN:-python3}"
 usage() {
     cat <<'EOF'
 Usage:
-  ./evaluation/run_eval.sh <checkpoint_or_hf_model_id> [encoder=vitl] [raw_type=d435] [cleanup_npy=true]
+  ./evaluation/run_eval.sh [checkpoint_or_hf_model_id=ckpt/promptda_vitl.ckpt] [encoder=vitl] [raw_type=d435] [cleanup_npy=false]
 
 Environment overrides:
   DATASET_PATH          HAMMER JSONL path. Default: data/HAMMER/test.jsonl
-  OUTPUT_DIR            Prediction/evaluation output directory.
+  OUTPUT_DIR            Prediction/evaluation output directory. Default: evaluation/output
   INPUT_SIZE            PromptDA max RGB side length. Default: 1008
   BATCH_SIZE            Path batch size; PromptDA runs one sample at a time. Default: 1
   NUM_WORKERS           DataLoader workers. Default: 0
-  SAVE_VIS              Save optional visualization images. Default: false
+  SAVE_VIS              Save optional visualization images. Default: true
   CLAMP_PREDICTION      Clamp saved predictions to HAMMER depth range. Default: false
   PYTHON_BIN            Python executable. Default: python3
 
@@ -33,34 +33,18 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
     exit 0
 fi
 
-if [[ $# -lt 1 ]]; then
-    usage
-    exit 2
-fi
-
-model_path="$1"
+model_path="${1:-ckpt/promptda_vitl.ckpt}"
 encoder="${2:-vitl}"
 raw_type="${3:-d435}"
-cleanup_npy="${4:-true}"
+cleanup_npy="${4:-false}"
 
 dataset_path="${DATASET_PATH:-data/HAMMER/test.jsonl}"
 input_size="${INPUT_SIZE:-1008}"
 batch_size="${BATCH_SIZE:-1}"
 num_workers="${NUM_WORKERS:-0}"
-save_vis="${SAVE_VIS:-false}"
+save_vis="${SAVE_VIS:-true}"
 clamp_prediction="${CLAMP_PREDICTION:-false}"
-
-model_name="$(basename "${model_path}")"
-model_stub="${model_name%%.*}"
-model_stub="${model_stub//\//_}"
-
-if [[ -f "${model_path}" ]]; then
-    model_dir="$(dirname "${model_path}")"
-else
-    model_dir="outputs"
-fi
-
-output_dir="${OUTPUT_DIR:-${model_dir}/hammer_promptda_${model_stub}_${raw_type}}"
+output_dir="${OUTPUT_DIR:-evaluation/output}"
 
 echo "model path/id: ${model_path}"
 echo "fixed model class: promptda.promptda.PromptDA"

@@ -4,6 +4,7 @@
 .vscode
 .hydra
 *.txt
+!evaluation/requirements.txt
 # All file or folders start with tmp will be ignored
 tmp*  
 
@@ -60,6 +61,7 @@ coverage.xml
 *.py,cover
 .hypothesis/
 .pytest_cache/
+.ruff_cache/
 cover/
 
 # Translations
@@ -87,7 +89,7 @@ docs/_build/
 target/
 
 # Jupyter Notebook
-.ipynb_checkpoints
+.ipynb_checkpoints/
 
 # IPython
 profile_default/
