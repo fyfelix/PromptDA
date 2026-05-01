@@ -11,6 +11,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from PIL import Image
+from scipy import ndimage
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -126,6 +127,12 @@ def parse_arguments():
         default=False,
         help="Clamp saved predictions to the HAMMER depth range",
     )
+    parser.add_argument(
+        "--fill-prompt-depth-holes",
+        type=str2bool,
+        default=True,
+        help="Fill invalid prompt depth pixels with nearest valid depth before inference",
+    )
     return parser.parse_args()
 
 
@@ -216,6 +223,33 @@ def load_depth_array(depth_path, depth_scale, max_depth):
     return depth
 
 
+def fill_prompt_depth_holes(depth, min_depth, max_depth, depth_path):
+    depth = np.asarray(depth, dtype=np.float32).copy()
+    valid_mask = (
+        np.isfinite(depth)
+        & (depth > 0)
+        & (depth >= min_depth)
+        & (depth <= max_depth)
+    )
+    invalid_mask = ~valid_mask
+
+    if not invalid_mask.any():
+        return depth
+    if not valid_mask.any():
+        raise ValueError(
+            "No valid prompt depth pixels available for hole filling: "
+            f"{depth_path}"
+        )
+
+    nearest_valid_indices = ndimage.distance_transform_edt(
+        invalid_mask,
+        return_distances=False,
+        return_indices=True,
+    )
+    depth[invalid_mask] = depth[tuple(nearest_valid_indices)][invalid_mask]
+    return depth
+
+
 def depth_to_tensor(depth):
     return torch.from_numpy(depth).unsqueeze(0).unsqueeze(0)
 
@@ -238,6 +272,13 @@ def sample_id_from_rgb_path(rgb_path):
 def predict_depth(model, rgb_path, raw_depth_path, gt_depth_path, args):
     rgb_tensor, _, rgb_for_vis = load_rgb_tensor(rgb_path, args.input_size)
     prompt_depth = load_depth_array(raw_depth_path, args.depth_scale, args.max_depth)
+    if args.fill_prompt_depth_holes:
+        prompt_depth = fill_prompt_depth_holes(
+            prompt_depth,
+            args.min_depth,
+            args.max_depth,
+            raw_depth_path,
+        )
     prompt_tensor = depth_to_tensor(prompt_depth)
     target_h, target_w = load_gt_shape(gt_depth_path)
 
