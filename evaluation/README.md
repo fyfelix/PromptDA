@@ -14,10 +14,9 @@
 PromptDA 输出 resize 回 GT depth 分辨率，并将每个样本保存为
 `HxW float32 .npy`，供 `evaluation/eval.py` 直接读取。
 
-推理阶段默认会对输入 PromptDA 的 raw/prompt depth 做空洞补全：`0`、非有限值、
-负值以及 HAMMER `depth-range` 外的像素会用最近有效深度填充。该补洞只作用于
-PromptDA 输入，不修改 GT depth，也不改变 `evaluation/eval.py` 里的 valid mask
-和指标计算口径。
+默认数据集指向已经离线补洞后的 D435 raw depth JSONL。推理阶段不再额外执行
+prompt depth 空洞补全；GT depth、`evaluation/eval.py` 里的 valid mask 和指标
+计算口径保持不变。
 
 当前不做 disparity 或 inverse-depth 转换。默认也不需要 alignment，因为
 PromptDA 会根据 raw prompt depth 的范围反归一化预测结果。如果要评估非 metric
@@ -25,10 +24,10 @@ checkpoint，请在评估阶段显式增加 alignment，并单独记录该次运
 
 ## 数据
 
-HAMMER 默认放在项目路径：
+HAMMER 默认使用已补洞的 D435 JSONL：
 
 ```text
-data/HAMMER/test.jsonl
+data/HAMMER/test_filled_d435.jsonl
 ```
 
 数据集 JSONL 由复制过来的 `HAMMERDataset` 读取，字段需要包含：
@@ -72,10 +71,9 @@ pip install -r evaluation/requirements.txt
 常用环境变量覆盖：
 
 ```bash
-DATASET_PATH=data/HAMMER/test.jsonl \
+DATASET_PATH=data/HAMMER/test_filled_d435.jsonl \
 OUTPUT_DIR=evaluation/output \
 MAX_SAMPLES=0 \
-FILL_PROMPT_DEPTH_HOLES=true \
 PYTHON_BIN=python3 \
 BATCH_SIZE=1 \
 NUM_WORKERS=0 \
@@ -101,9 +99,8 @@ mean_metrics_<timestamp>_False.json
 
 默认会保存 RGB、prompt depth、prediction 的可视化 JPG；设置 `SAVE_VIS=false`
 可关闭可视化输出。
-Prompt depth 可视化展示的是实际送入 PromptDA 的深度；默认启用补洞时，即为补洞后
-的 prompt depth。设置 `FILL_PROMPT_DEPTH_HOLES=false` 可关闭补洞，复现原始
-`0` 空洞输入行为。
+Prompt depth 可视化展示的是实际送入 PromptDA 的深度；默认情况下该深度来自
+`data/HAMMER/test_filled_d435.jsonl` 指向的已补洞 raw depth 文件。
 设置 `MAX_SAMPLES=N` 可只运行并评估数据集前 N 条样本；默认 `MAX_SAMPLES=0`
 表示评估全部样本。
 只有在明确希望把预测值 clamp 到 HAMMER `depth-range` 时，才设置
