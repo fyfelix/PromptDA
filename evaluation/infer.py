@@ -67,7 +67,19 @@ def parse_arguments():
         "--output",
         type=str,
         default="output_dir",
-        help="Directory for .npy predictions and metadata",
+        help="Directory for run metadata; also used for predictions/visualizations when dedicated dirs are not set",
+    )
+    parser.add_argument(
+        "--prediction-dir",
+        type=str,
+        default=None,
+        help="Directory for per-sample .npy predictions",
+    )
+    parser.add_argument(
+        "--visualization-dir",
+        type=str,
+        default=None,
+        help="Directory for optional RGB/depth visualization images",
     )
     parser.add_argument(
         "--raw-type",
@@ -133,6 +145,12 @@ def parse_arguments():
         default=True,
         help="Fill invalid prompt depth pixels with nearest valid depth before inference",
     )
+    parser.add_argument(
+        "--max-samples",
+        type=int,
+        default=0,
+        help="Maximum number of dataset samples to run; 0 means all samples",
+    )
     return parser.parse_args()
 
 
@@ -149,6 +167,9 @@ def validate_inputs(args):
     if not os.path.exists(args.dataset):
         print(f"Error: dataset file '{args.dataset}' does not exist")
         sys.exit(1)
+    if args.max_samples < 0:
+        print("Error: --max-samples must be >= 0")
+        sys.exit(1)
 
     args.model_path = os.path.expanduser(args.model_path)
     if not os.path.exists(args.model_path) and not looks_like_hf_model_id(args.model_path):
@@ -158,7 +179,21 @@ def validate_inputs(args):
         )
         sys.exit(1)
 
+    if args.prediction_dir is None:
+        args.prediction_dir = args.output
+    if args.visualization_dir is None:
+        args.visualization_dir = args.output
+
     os.makedirs(args.output, exist_ok=True)
+    os.makedirs(args.prediction_dir, exist_ok=True)
+    if args.save_vis:
+        os.makedirs(args.visualization_dir, exist_ok=True)
+
+
+def limit_dataset(dataset, max_samples):
+    if max_samples > 0:
+        dataset.data = dataset.data[:max_samples]
+    return dataset
 
 
 def load_model(args):
@@ -338,6 +373,8 @@ def inference(args):
     dataset = HAMMERDataset(args.dataset, args.raw_type)
     args.min_depth = float(dataset.depth_range[0])
     args.max_depth = float(dataset.depth_range[1])
+    dataset = limit_dataset(dataset, args.max_samples)
+    args.num_samples = len(dataset)
     args.device = DEVICE
     args.resolved_model_module = "promptda.promptda"
     args.resolved_model_class = "PromptDA"
@@ -370,11 +407,11 @@ def inference(args):
             pred, rgb_for_vis, prompt_depth = predict_depth(
                 model, rgb_path, raw_depth_path, gt_depth_path, args
             )
-            np.save(Path(args.output) / f"{name}.npy", pred)
+            np.save(Path(args.prediction_dir) / f"{name}.npy", pred)
 
             if args.save_vis:
                 save_visualization(
-                    Path(args.output) / f"{name}_promptda_vis.jpg",
+                    Path(args.visualization_dir) / f"{name}_promptda_vis.jpg",
                     rgb_for_vis,
                     prompt_depth,
                     pred,

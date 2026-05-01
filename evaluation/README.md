@@ -62,14 +62,19 @@ pip install -r evaluation/requirements.txt
 完整位置参数：
 
 ```bash
-./evaluation/run_eval.sh [checkpoint_or_hf_model_id=ckpt/promptda_vitl.ckpt] [encoder=vitl] [raw_type=d435] [cleanup_npy=false]
+./evaluation/run_eval.sh [checkpoint_or_hf_model_id=ckpts/promptda_vitl.ckpt] [encoder=vitl] [raw_type=d435] [cleanup_npy=false]
 ```
+
+默认 checkpoint 路径是 `ckpts/promptda_vitl.ckpt`。`OUTPUT_DIR` 是输出根目录；
+每次运行会在其下新建一个时间戳目录，例如
+`evaluation/output/2026-05-01_12-30-00/`。
 
 常用环境变量覆盖：
 
 ```bash
 DATASET_PATH=data/HAMMER/test.jsonl \
 OUTPUT_DIR=evaluation/output \
+MAX_SAMPLES=0 \
 FILL_PROMPT_DEPTH_HOLES=true \
 PYTHON_BIN=python3 \
 BATCH_SIZE=1 \
@@ -83,12 +88,13 @@ NUM_WORKERS=0 \
 
 ## 输出
 
-输出目录包含：
+每次运行的时间戳目录包含：
 
 ```text
 args.json
 eval_args.json
-*.npy
+predictions/*.npy
+visualizations/*_promptda_vis.jpg
 all_metrics_<timestamp>_False.csv
 mean_metrics_<timestamp>_False.json
 ```
@@ -98,6 +104,8 @@ mean_metrics_<timestamp>_False.json
 Prompt depth 可视化展示的是实际送入 PromptDA 的深度；默认启用补洞时，即为补洞后
 的 prompt depth。设置 `FILL_PROMPT_DEPTH_HOLES=false` 可关闭补洞，复现原始
 `0` 空洞输入行为。
+设置 `MAX_SAMPLES=N` 可只运行并评估数据集前 N 条样本；默认 `MAX_SAMPLES=0`
+表示评估全部样本。
 只有在明确希望把预测值 clamp 到 HAMMER `depth-range` 时，才设置
 `CLAMP_PREDICTION=true`。
 

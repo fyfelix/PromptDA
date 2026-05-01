@@ -1,4 +1,5 @@
 import argparse
+import os
 import cv2
 import numpy as np
 from tqdm import tqdm
@@ -42,7 +43,13 @@ def parse_arguments():
         "--output",
         type=str,
         default="output_dir",
-        help="Prediction output directory",
+        help="Directory for evaluation outputs",
+    )
+    parser.add_argument(
+        "--prediction-dir",
+        type=str,
+        default=None,
+        help="Directory containing per-sample .npy predictions",
     )
     parser.add_argument(
         "--raw-type", type=str, required=True, choices=["d435", "l515", "tof"], help="Raw type"
@@ -64,6 +71,12 @@ def parse_arguments():
     )
     parser.add_argument(
         "--image-max", type=float, default=5.0, help="Maximum valid depth value"
+    )
+    parser.add_argument(
+        "--max-samples",
+        type=int,
+        default=0,
+        help="Maximum number of dataset samples to evaluate; 0 means all samples",
     )
     return parser.parse_args()
 
@@ -138,8 +151,13 @@ current_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
 args = parse_arguments()
 
+if args.max_samples < 0:
+    raise ValueError("--max-samples must be >= 0")
 
-prediction_path = args.output
+output_path = args.output
+prediction_path = args.prediction_dir or args.output
+args.prediction_dir = prediction_path
+os.makedirs(output_path, exist_ok=True)
 
 depth_scale = 1000.0
 
@@ -148,8 +166,11 @@ if 'hammer' in args.dataset.lower():
 else:
     raise ValueError(f"Invalid dataset: {args.dataset}")
 
+if args.max_samples > 0:
+    dataset.data = dataset.data[:args.max_samples]
+args.num_samples = len(dataset)
 
-with open(join(prediction_path, 'eval_args.json'), 'w') as f:
+with open(join(output_path, 'eval_args.json'), 'w') as f:
     json.dump(vars(args), f)
 
 
@@ -225,7 +246,7 @@ all_metrics_mean = all_metrics.mean(numeric_only=True).to_frame().T
 
 
 
-all_metrics.to_csv(join(prediction_path,f'all_metrics_{current_time}_{ALIGN}.csv'), index=False)
-all_metrics_mean.to_json(join(prediction_path, f'mean_metrics_{current_time}_{ALIGN}.json'), orient='records', lines=True, force_ascii=False)
+all_metrics.to_csv(join(output_path,f'all_metrics_{current_time}_{ALIGN}.csv'), index=False)
+all_metrics_mean.to_json(join(output_path, f'mean_metrics_{current_time}_{ALIGN}.json'), orient='records', lines=True, force_ascii=False)
 from loguru import logger
-logger.info(f'save dir: {prediction_path}')
+logger.info(f'save dir: {output_path}')
