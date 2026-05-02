@@ -11,19 +11,21 @@ Usage:
   ./evaluation/run_eval.sh [checkpoint_or_hf_model_id=ckpts/promptda_vitl.ckpt] [encoder=vitl] [raw_type=d435] [cleanup_npy=false]
 
 Environment overrides:
-  DATASET_PATH          HAMMER JSONL path. Default: data/HAMMER/test_filled_d435.jsonl
-  OUTPUT_DIR            Base output directory. A timestamped run directory is created under it. Default: evaluation/output
+  DATASET_PATH          HAMMER or ClearPose JSONL path. Default: data/HAMMER/test_filled_d435.jsonl
+  OUTPUT_DIR            Base output directory. A dataset-tagged timestamped run directory is created under it. Default: evaluation/output
   INPUT_SIZE            PromptDA max RGB side length. Default: 1008
   BATCH_SIZE            Path batch size; PromptDA runs one sample at a time. Default: 1
   NUM_WORKERS           DataLoader workers. Default: 0
   MAX_SAMPLES           Maximum number of dataset samples to run. 0 means all. Default: 0
   SAVE_VIS              Save optional visualization images. Default: true
-  CLAMP_PREDICTION      Clamp saved predictions to HAMMER depth range. Default: false
+  CLAMP_PREDICTION      Clamp saved predictions to the dataset depth range. Default: false
   PYTHON_BIN            Python executable. Default: python3
+
+ClearPose only supports raw_type=d435.
 
 This wrapper is adapted for PromptDA:
   infer.py loads promptda.promptda.PromptDA
-  HAMMER raw depth is used as PromptDA prompt_depth
+  Selected raw depth is used as PromptDA prompt_depth
   infer.py writes predictions to <run_dir>/predictions and visualizations to <run_dir>/visualizations
   eval.py reads predictions and writes fixed CSV/JSON metrics to <run_dir>
 EOF
@@ -40,6 +42,14 @@ raw_type="${3:-d435}"
 cleanup_npy="${4:-false}"
 
 dataset_path="${DATASET_PATH:-data/HAMMER/test_filled_d435.jsonl}"
+case "${dataset_path}" in
+    *clearpose*|*ClearPose*)
+        dataset_tag="clearpose"
+        ;;
+    *)
+        dataset_tag="hammer"
+        ;;
+esac
 input_size="${INPUT_SIZE:-1008}"
 batch_size="${BATCH_SIZE:-1}"
 num_workers="${NUM_WORKERS:-0}"
@@ -48,7 +58,7 @@ save_vis="${SAVE_VIS:-true}"
 clamp_prediction="${CLAMP_PREDICTION:-false}"
 output_root="${OUTPUT_DIR:-evaluation/output}"
 timestamp="$(date '+%Y-%m-%d_%H-%M-%S')"
-run_output_dir="${output_root}/${timestamp}"
+run_output_dir="${output_root}/${dataset_tag}_${timestamp}"
 prediction_dir="${run_output_dir}/predictions"
 visualization_dir="${run_output_dir}/visualizations"
 
@@ -56,6 +66,7 @@ echo "model path/id: ${model_path}"
 echo "fixed model class: promptda.promptda.PromptDA"
 echo "encoder: ${encoder}"
 echo "dataset path: ${dataset_path}"
+echo "dataset tag: ${dataset_tag}"
 echo "raw type: ${raw_type}"
 echo "input size: ${input_size}"
 echo "batch size: ${batch_size}"
@@ -89,7 +100,7 @@ fi
 
 "${PYTHON_BIN}" "${infer_args[@]}"
 
-echo "evaluating PromptDA predictions on HAMMER"
+echo "evaluating PromptDA predictions on ${dataset_tag}"
 time "${PYTHON_BIN}" "${SCRIPT_DIR}/eval.py" \
     --encoder "${encoder}" \
     --model-path "${model_path}" \

@@ -19,7 +19,11 @@ REPO_ROOT = SCRIPT_DIR.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from dataset import HAMMERDataset
+from dataset import (
+    limit_dataset_for_eval,
+    load_dataset_for_eval,
+    resolve_sample_name,
+)
 from promptda.promptda import PromptDA
 
 
@@ -43,7 +47,7 @@ def str2bool(value):
 
 def parse_arguments():
     parser = argparse.ArgumentParser(
-        description="PromptDA inference for HAMMER evaluation",
+        description="PromptDA inference for HAMMER or ClearPose evaluation",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
@@ -60,7 +64,7 @@ def parse_arguments():
         help="Local checkpoint path or Hugging Face model id",
     )
     parser.add_argument(
-        "--dataset", type=str, required=True, help="HAMMER JSONL path"
+        "--dataset", type=str, required=True, help="HAMMER or ClearPose JSONL path"
     )
     parser.add_argument(
         "--output",
@@ -85,7 +89,7 @@ def parse_arguments():
         type=str,
         required=True,
         choices=["d435", "l515", "tof"],
-        help="HAMMER raw depth field used as PromptDA prompt depth",
+        help="Raw depth field used as PromptDA prompt depth; ClearPose only supports d435",
     )
     parser.add_argument(
         "--input-size",
@@ -136,7 +140,7 @@ def parse_arguments():
         "--clamp-prediction",
         type=str2bool,
         default=False,
-        help="Clamp saved predictions to the HAMMER depth range",
+        help="Clamp saved predictions to the dataset depth range",
     )
     parser.add_argument(
         "--max-samples",
@@ -181,12 +185,6 @@ def validate_inputs(args):
     os.makedirs(args.prediction_dir, exist_ok=True)
     if args.save_vis:
         os.makedirs(args.visualization_dir, exist_ok=True)
-
-
-def limit_dataset(dataset, max_samples):
-    if max_samples > 0:
-        dataset.data = dataset.data[:max_samples]
-    return dataset
 
 
 def load_model(args):
@@ -262,13 +260,6 @@ def load_gt_shape(gt_depth_path):
     return gt_depth.shape[:2]
 
 
-def sample_id_from_rgb_path(rgb_path):
-    parts = rgb_path.split("/")
-    scene_name = parts[-4]
-    frame_name = Path(parts[-1]).stem
-    return f"{scene_name}#{frame_name}"
-
-
 @torch.no_grad()
 def predict_depth(model, rgb_path, raw_depth_path, gt_depth_path, args):
     rgb_tensor, _, rgb_for_vis = load_rgb_tensor(rgb_path, args.input_size)
@@ -329,10 +320,10 @@ def save_visualization(output_path, rgb, prompt_depth, pred_depth, args):
 def inference(args):
     validate_inputs(args)
 
-    dataset = HAMMERDataset(args.dataset, args.raw_type)
+    dataset = load_dataset_for_eval(args.dataset, args.raw_type)
     args.min_depth = float(dataset.depth_range[0])
     args.max_depth = float(dataset.depth_range[1])
-    dataset = limit_dataset(dataset, args.max_samples)
+    dataset = limit_dataset_for_eval(dataset, args.max_samples)
     args.num_samples = len(dataset)
     args.device = DEVICE
     args.resolved_model_module = "promptda.promptda"
@@ -353,7 +344,8 @@ def inference(args):
         pin_memory=torch.cuda.is_available(),
     )
 
-    for batch_items in tqdm(dataloader, desc="PromptDA HAMMER inference"):
+    dataset_label = "ClearPose" if "clearpose" in args.dataset.lower() else "HAMMER"
+    for batch_items in tqdm(dataloader, desc=f"PromptDA {dataset_label} inference"):
         rgb_paths, raw_depth_paths, gt_depth_paths = batch_items
         for rgb_path, raw_depth_path, gt_depth_path in zip(
             rgb_paths, raw_depth_paths, gt_depth_paths
@@ -361,7 +353,7 @@ def inference(args):
             rgb_path = str(rgb_path)
             raw_depth_path = str(raw_depth_path)
             gt_depth_path = str(gt_depth_path)
-            name = sample_id_from_rgb_path(rgb_path)
+            name = resolve_sample_name(rgb_path, args.dataset)
 
             pred, rgb_for_vis, prompt_depth = predict_depth(
                 model, rgb_path, raw_depth_path, gt_depth_path, args

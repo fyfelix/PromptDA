@@ -9,7 +9,11 @@ from torch.utils.data import Dataset, DataLoader
 from utils.metric import abs_relative_difference, rmse_linear, delta1_acc, mae_linear, delta4_acc_105, delta5_acc110
 import pandas as pd
 from os.path import exists
-from dataset import HAMMERDataset
+from dataset import (
+    limit_dataset_for_eval,
+    load_dataset_for_eval,
+    resolve_sample_name,
+)
 
 from datetime import datetime
 from os.path import join
@@ -20,7 +24,7 @@ from os.path import exists
 
 def parse_arguments():
     parser = argparse.ArgumentParser(
-        description="RGBD Depth Evaluation",
+        description="RGBD Depth Evaluation for HAMMER or ClearPose",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
@@ -37,7 +41,7 @@ def parse_arguments():
         help="Path to the model checkpoint file",
     )
     parser.add_argument(
-        "--dataset", type=str, required=True, help="JSONL Path to the process dataset"
+        "--dataset", type=str, required=True, help="HAMMER or ClearPose JSONL path"
     )
     parser.add_argument(
         "--output",
@@ -52,7 +56,11 @@ def parse_arguments():
         help="Directory containing per-sample .npy predictions",
     )
     parser.add_argument(
-        "--raw-type", type=str, required=True, choices=["d435", "l515", "tof"], help="Raw type"
+        "--raw-type",
+        type=str,
+        required=True,
+        choices=["d435", "l515", "tof"],
+        help="Raw depth type; ClearPose only supports d435",
     )
     parser.add_argument(
         "--input-size", type=int, default=518, help="Input size for inference"
@@ -104,10 +112,7 @@ class EvalDataset(Dataset):
         sample = self.dataset[idx]
         depth_GT, valid_mask = load_gt_depth(sample[2], self.depth_scale, self.args.max_depth, self.args.min_depth)
 
-        tmp = sample[0].split('/')
-
-        scene_name = tmp[-4]
-        name = scene_name+'#'+tmp[-1].split('.')[0]
+        name = resolve_sample_name(sample[0], self.args.dataset)
 
         pred = np.load(join(self.prediction_path, name+'.npy'))
         
@@ -161,13 +166,8 @@ os.makedirs(output_path, exist_ok=True)
 
 depth_scale = 1000.0
 
-if 'hammer' in args.dataset.lower():
-    dataset = HAMMERDataset(args.dataset, args.raw_type)
-else:
-    raise ValueError(f"Invalid dataset: {args.dataset}")
-
-if args.max_samples > 0:
-    dataset.data = dataset.data[:args.max_samples]
+dataset = load_dataset_for_eval(args.dataset, args.raw_type)
+dataset = limit_dataset_for_eval(dataset, args.max_samples)
 args.num_samples = len(dataset)
 
 with open(join(output_path, 'eval_args.json'), 'w') as f:
