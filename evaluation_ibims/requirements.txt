@@ -1,0 +1,4 @@
+# Extra packages used by iBims official evaluation.
+# Install after the repository-level requirements.txt in the active conda env.
+scikit-image
+scikit-learn
