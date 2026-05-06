@@ -6,32 +6,7 @@ import os
 import sys
 from pathlib import Path
 
-import cv2
-import numpy as np
-import torch
-import torch.nn.functional as F
-from PIL import Image
-from torch.utils.data import DataLoader
-from tqdm import tqdm
-
-SCRIPT_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SCRIPT_DIR.parent
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
-from dataset import (
-    limit_dataset_for_eval,
-    load_dataset_for_eval,
-    resolve_sample_name,
-)
-from promptda.promptda import PromptDA
-
-
-DEVICE = (
-    "cuda"
-    if torch.cuda.is_available()
-    else "mps" if torch.backends.mps.is_available() else "cpu"
-)
+os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
 
 
 def str2bool(value):
@@ -47,7 +22,7 @@ def str2bool(value):
 
 def parse_arguments():
     parser = argparse.ArgumentParser(
-        description="PromptDA inference for HAMMER or ClearPose evaluation",
+        description="PromptDA inference for HAMMER, ClearPose, or DREDS evaluation",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
@@ -64,13 +39,16 @@ def parse_arguments():
         help="Local checkpoint path or Hugging Face model id",
     )
     parser.add_argument(
-        "--dataset", type=str, required=True, help="HAMMER or ClearPose JSONL path"
+        "--dataset",
+        type=str,
+        required=True,
+        help="HAMMER, ClearPose, or DREDS JSONL path",
     )
     parser.add_argument(
         "--output",
         type=str,
         default="output_dir",
-        help="Directory for run metadata; also used for predictions/visualizations when dedicated dirs are not set",
+        help="Directory for run metadata, predictions/, and visualizations/",
     )
     parser.add_argument(
         "--prediction-dir",
@@ -151,6 +129,39 @@ def parse_arguments():
     return parser.parse_args()
 
 
+if __name__ == "__main__" and any(arg in ("-h", "--help") for arg in sys.argv[1:]):
+    parse_arguments()
+    sys.exit(0)
+
+
+import cv2
+import numpy as np
+import torch
+import torch.nn.functional as F
+from PIL import Image
+from torch.utils.data import DataLoader
+from tqdm import tqdm
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+REPO_ROOT = SCRIPT_DIR.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from dataset import (
+    limit_dataset_for_eval,
+    load_test_dataset,
+    sample_name_for_dataset,
+)
+from promptda.promptda import PromptDA
+
+
+DEVICE = (
+    "cuda"
+    if torch.cuda.is_available()
+    else "mps" if torch.backends.mps.is_available() else "cpu"
+)
+
+
 def looks_like_hf_model_id(model_path):
     path = Path(os.path.expanduser(model_path))
     if path.exists():
@@ -177,9 +188,9 @@ def validate_inputs(args):
         sys.exit(1)
 
     if args.prediction_dir is None:
-        args.prediction_dir = args.output
+        args.prediction_dir = str(Path(args.output) / "predictions")
     if args.visualization_dir is None:
-        args.visualization_dir = args.output
+        args.visualization_dir = str(Path(args.output) / "visualizations")
 
     os.makedirs(args.output, exist_ok=True)
     os.makedirs(args.prediction_dir, exist_ok=True)
@@ -256,7 +267,7 @@ def depth_to_tensor(depth):
 def load_gt_shape(gt_depth_path):
     gt_depth = cv2.imread(gt_depth_path, cv2.IMREAD_UNCHANGED)
     if gt_depth is None:
-        raise ValueError(f"Could not load GT depth image: {gt_depth_path}")
+        raise ValueError(f"Could not load GT depth from {gt_depth_path}")
     return gt_depth.shape[:2]
 
 
@@ -320,7 +331,10 @@ def save_visualization(output_path, rgb, prompt_depth, pred_depth, args):
 def inference(args):
     validate_inputs(args)
 
-    dataset = load_dataset_for_eval(args.dataset, args.raw_type)
+    dataset, dataset_kind = load_test_dataset(args.dataset, args.raw_type)
+    args.dataset_kind = dataset_kind
+    if hasattr(dataset, "depth_scale"):
+        args.depth_scale = dataset.depth_scale
     args.min_depth = float(dataset.depth_range[0])
     args.max_depth = float(dataset.depth_range[1])
     dataset = limit_dataset_for_eval(dataset, args.max_samples)
@@ -344,7 +358,7 @@ def inference(args):
         pin_memory=torch.cuda.is_available(),
     )
 
-    dataset_label = "ClearPose" if "clearpose" in args.dataset.lower() else "HAMMER"
+    dataset_label = dataset_kind.upper()
     for batch_items in tqdm(dataloader, desc=f"PromptDA {dataset_label} inference"):
         rgb_paths, raw_depth_paths, gt_depth_paths = batch_items
         for rgb_path, raw_depth_path, gt_depth_path in zip(
@@ -353,7 +367,7 @@ def inference(args):
             rgb_path = str(rgb_path)
             raw_depth_path = str(raw_depth_path)
             gt_depth_path = str(gt_depth_path)
-            name = resolve_sample_name(rgb_path, args.dataset)
+            name = sample_name_for_dataset(dataset_kind, rgb_path)
 
             pred, rgb_for_vis, prompt_depth = predict_depth(
                 model, rgb_path, raw_depth_path, gt_depth_path, args
