@@ -30,7 +30,7 @@ def parse_arguments():
         "--dataset",
         type=str,
         required=True,
-        help="HAMMER, ClearPose, or DREDS JSONL path",
+        help="HAMMER, ClearPose, DREDS, or TRansPose JSONL path",
     )
     parser.add_argument(
         "--output",
@@ -106,7 +106,7 @@ from tqdm import tqdm
 from dataset import (
     limit_dataset_for_eval,
     load_test_dataset,
-    sample_name_for_dataset,
+    sample_name_for_sample,
 )
 from utils.metric import (
     abs_relative_difference,
@@ -167,7 +167,8 @@ class EvalDataset(Dataset):
         return len(self.dataset)
 
     def __getitem__(self, idx):
-        rgb_path, _, gt_depth_path = self.dataset[idx]
+        sample = self.dataset[idx]
+        gt_depth_path = sample[2]
         depth_gt, valid_mask = load_gt_depth(
             gt_depth_path,
             self.depth_scale,
@@ -175,7 +176,7 @@ class EvalDataset(Dataset):
             self.args.min_depth,
         )
 
-        name = sample_name_for_dataset(self.args.dataset_kind, rgb_path)
+        name = sample_name_for_sample(self.args.dataset_kind, sample)
         pred_path = join(self.prediction_path, name + ".npy")
         if not exists(pred_path):
             pred_path = join(self.legacy_prediction_path, name + ".npy")

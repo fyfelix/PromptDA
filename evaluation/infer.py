@@ -8,6 +8,8 @@ from pathlib import Path
 
 os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
 
+DEFAULT_INTRINSICS_PATH = "data/TRansPose/sequences/intrinsics.txt"
+
 
 def str2bool(value):
     if isinstance(value, bool):
@@ -22,7 +24,9 @@ def str2bool(value):
 
 def parse_arguments():
     parser = argparse.ArgumentParser(
-        description="PromptDA inference for HAMMER, ClearPose, or DREDS evaluation",
+        description=(
+            "PromptDA inference for HAMMER, ClearPose, DREDS, or TRansPose evaluation"
+        ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
@@ -42,7 +46,7 @@ def parse_arguments():
         "--dataset",
         type=str,
         required=True,
-        help="HAMMER, ClearPose, or DREDS JSONL path",
+        help="HAMMER, ClearPose, DREDS, or TRansPose JSONL path",
     )
     parser.add_argument(
         "--output",
@@ -115,6 +119,41 @@ def parse_arguments():
         "--save-vis", action="store_true", help="Save optional RGB/depth visualizations"
     )
     parser.add_argument(
+        "--intrinsics-path",
+        type=str,
+        default=DEFAULT_INTRINSICS_PATH,
+        help="Camera intrinsics text file for TRansPose point cloud visualizations",
+    )
+    parser.add_argument(
+        "--pc-rot-x-deg",
+        type=float,
+        default=25.0,
+        help="TRansPose point cloud view rotation around X axis in degrees",
+    )
+    parser.add_argument(
+        "--pc-rot-y-deg",
+        type=float,
+        default=15.0,
+        help="TRansPose point cloud view rotation around Y axis in degrees",
+    )
+    parser.add_argument(
+        "--pc-knn-k",
+        type=int,
+        default=16,
+        help="KNN neighbors for TRansPose predicted point cloud floater filtering",
+    )
+    parser.add_argument(
+        "--pc-knn-std-ratio",
+        type=float,
+        default=2.0,
+        help="Mean-distance std ratio threshold for TRansPose point cloud filtering",
+    )
+    parser.add_argument(
+        "--disable-pc-knn-filter",
+        action="store_true",
+        help="Disable KNN filtering for TRansPose predicted point cloud visualization",
+    )
+    parser.add_argument(
         "--clamp-prediction",
         type=str2bool,
         default=False,
@@ -150,7 +189,7 @@ if str(REPO_ROOT) not in sys.path:
 from dataset import (
     limit_dataset_for_eval,
     load_test_dataset,
-    sample_name_for_dataset,
+    sample_name_for_sample,
 )
 from promptda.promptda import PromptDA
 
@@ -273,7 +312,7 @@ def load_gt_shape(gt_depth_path):
 
 @torch.no_grad()
 def predict_depth(model, rgb_path, raw_depth_path, gt_depth_path, args):
-    rgb_tensor, _, rgb_for_vis = load_rgb_tensor(rgb_path, args.input_size)
+    rgb_tensor, original_shape, rgb_for_vis = load_rgb_tensor(rgb_path, args.input_size)
     prompt_depth = load_depth_array(raw_depth_path, args.depth_scale, args.max_depth)
     prompt_tensor = depth_to_tensor(prompt_depth)
     target_h, target_w = load_gt_shape(gt_depth_path)
@@ -298,7 +337,7 @@ def predict_depth(model, rgb_path, raw_depth_path, gt_depth_path, args):
     if args.clamp_prediction:
         pred = np.clip(pred, args.min_depth, args.max_depth).astype(np.float32)
 
-    return pred, rgb_for_vis, prompt_depth
+    return pred, rgb_for_vis, prompt_depth, original_shape
 
 
 def colorize_depth(depth, image_min, image_max):
@@ -328,6 +367,250 @@ def save_visualization(output_path, rgb, prompt_depth, pred_depth, args):
     Image.fromarray(grid).save(output_path)
 
 
+def load_intrinsics(path):
+    intrinsics = np.loadtxt(path, dtype=np.float32)
+    if intrinsics.shape != (3, 3):
+        raise ValueError(
+            f"Intrinsics matrix must have shape (3, 3), got {intrinsics.shape}"
+        )
+    return intrinsics
+
+
+def scale_intrinsics(intrinsics, orig_hw, new_hw):
+    sy = new_hw[0] / orig_hw[0]
+    sx = new_hw[1] / orig_hw[1]
+    scaled = intrinsics.copy()
+    scaled[0, :] *= sx
+    scaled[1, :] *= sy
+    return scaled
+
+
+def resize_to(image, target_hw, interpolation=cv2.INTER_LINEAR):
+    target_h, target_w = target_hw
+    if image.shape[:2] == (target_h, target_w):
+        return image
+    return cv2.resize(image, (target_w, target_h), interpolation=interpolation)
+
+
+def filter_pointcloud_knn(points, colors, k=16, std_ratio=2.0):
+    if k < 1 or points.shape[0] <= k:
+        return points, colors
+
+    try:
+        from scipy.spatial import cKDTree
+
+        neighbor_count = min(k + 1, points.shape[0])
+        tree = cKDTree(points)
+        distances, _ = tree.query(points, k=neighbor_count, workers=-1)
+    except Exception:
+        return points, colors
+
+    if distances.ndim == 1:
+        return points, colors
+
+    mean_distances = distances[:, 1:].mean(axis=1)
+    finite = np.isfinite(mean_distances)
+    if not finite.any():
+        return points, colors
+
+    valid_mean_distances = mean_distances[finite]
+    threshold = valid_mean_distances.mean() + std_ratio * valid_mean_distances.std()
+    keep = finite & (mean_distances <= threshold)
+    if not keep.any():
+        return points, colors
+    return points[keep], colors[keep]
+
+
+def render_pointcloud_reproject(
+    depth_map,
+    intrinsics,
+    rgb_img,
+    rot_x_deg=25.0,
+    rot_y_deg=15.0,
+    bg_color=(255, 255, 255),
+    knn_filter=True,
+    knn_k=16,
+    knn_std_ratio=2.0,
+):
+    depth_map = np.asarray(depth_map, dtype=np.float32).squeeze()
+    height, width = depth_map.shape
+    fx, fy = intrinsics[0, 0], intrinsics[1, 1]
+    cx, cy = intrinsics[0, 2], intrinsics[1, 2]
+
+    u, v = np.meshgrid(np.arange(width), np.arange(height))
+    valid = (depth_map > 1e-8) & np.isfinite(depth_map)
+    if not valid.any():
+        return np.full((height, width, 3), bg_color, dtype=np.uint8)
+
+    z = depth_map[valid]
+    x = (u[valid] - cx) * z / fx
+    y = (v[valid] - cy) * z / fy
+    points = np.stack([x, y, z], axis=-1).astype(np.float32, copy=False)
+    colors = np.clip(rgb_img, 0, 255).astype(np.uint8)[valid]
+    if knn_filter:
+        points, colors = filter_pointcloud_knn(
+            points,
+            colors,
+            k=knn_k,
+            std_ratio=knn_std_ratio,
+        )
+
+    center = points.mean(axis=0)
+    points_centered = points - center
+
+    rx = np.radians(rot_x_deg)
+    ry = np.radians(rot_y_deg)
+    cos_x, sin_x = np.cos(rx), np.sin(rx)
+    cos_y, sin_y = np.cos(ry), np.sin(ry)
+
+    x1 = points_centered[:, 0]
+    y1 = points_centered[:, 1] * cos_x - points_centered[:, 2] * sin_x
+    z1 = points_centered[:, 1] * sin_x + points_centered[:, 2] * cos_x
+    x2 = x1 * cos_y + z1 * sin_y
+    y2 = y1
+    z2 = -x1 * sin_y + z1 * cos_y
+    points_rot = np.stack([x2, y2, z2], axis=-1) + center
+    z_new = points_rot[:, 2]
+    keep = z_new > 1e-4
+    if not keep.any():
+        return np.full((height, width, 3), bg_color, dtype=np.uint8)
+
+    u_proj = points_rot[keep, 0] * fx / z_new[keep] + cx
+    v_proj = points_rot[keep, 1] * fy / z_new[keep] + cy
+    z_buf = z_new[keep]
+    c_buf = colors[keep]
+
+    pad = int(max(height, width) * 0.3)
+    canvas_h, canvas_w = height + 2 * pad, width + 2 * pad
+    ui = np.round(u_proj + pad).astype(np.int32)
+    vi = np.round(v_proj + pad).astype(np.int32)
+
+    in_bounds = (ui >= 0) & (ui < canvas_w) & (vi >= 0) & (vi < canvas_h)
+    ui = ui[in_bounds]
+    vi = vi[in_bounds]
+    z_buf = z_buf[in_bounds]
+    c_buf = c_buf[in_bounds]
+    if ui.size == 0:
+        return np.full((height, width, 3), bg_color, dtype=np.uint8)
+
+    order = np.argsort(-z_buf)
+    ui = ui[order]
+    vi = vi[order]
+    c_buf = c_buf[order]
+
+    canvas = np.full((canvas_h, canvas_w, 3), bg_color, dtype=np.uint8)
+    canvas[vi, ui] = c_buf
+
+    filled = np.zeros((canvas_h, canvas_w), dtype=np.uint8)
+    filled[vi, ui] = 255
+    kernel = np.ones((3, 3), dtype=np.uint8)
+    filled_dilated = cv2.dilate(filled, kernel, iterations=1)
+    holes = (filled_dilated > 0) & (filled == 0)
+    if holes.any():
+        for channel_idx in range(3):
+            blurred = cv2.blur(canvas[:, :, channel_idx].astype(np.float32), (3, 3))
+            canvas[:, :, channel_idx][holes] = blurred[holes].astype(np.uint8)
+
+    rows = np.any(filled_dilated > 0, axis=1)
+    cols = np.any(filled_dilated > 0, axis=0)
+    if rows.any() and cols.any():
+        row_min, row_max = np.where(rows)[0][[0, -1]]
+        col_min, col_max = np.where(cols)[0][[0, -1]]
+        margin = 10
+        row_min = max(0, row_min - margin)
+        row_max = min(canvas_h - 1, row_max + margin)
+        col_min = max(0, col_min - margin)
+        col_max = min(canvas_w - 1, col_max + margin)
+        canvas = canvas[row_min : row_max + 1, col_min : col_max + 1]
+
+    return resize_to(canvas, (height, width), interpolation=cv2.INTER_LINEAR)
+
+
+def image_grid(images, rows, cols):
+    if len(images) != rows * cols:
+        raise ValueError(f"Expected {rows * cols} images, got {len(images)}")
+
+    height, width = images[0].shape[:2]
+    normalized = [
+        resize_to(image, (height, width), interpolation=cv2.INTER_LINEAR).astype(
+            np.uint8
+        )
+        for image in images
+    ]
+    row_images = [
+        np.concatenate(normalized[row_idx * cols : (row_idx + 1) * cols], axis=1)
+        for row_idx in range(rows)
+    ]
+    return np.concatenate(row_images, axis=0)
+
+
+def create_transpose_visualization(
+    rgb,
+    raw_depth,
+    pred_depth,
+    gt_depth,
+    intrinsics,
+    args,
+):
+    rgb_u8 = (np.clip(rgb, 0, 1) * 255).astype(np.uint8)
+    target_hw = rgb_u8.shape[:2]
+    raw_depth = resize_to(raw_depth, target_hw, interpolation=cv2.INTER_NEAREST)
+    pred_depth = resize_to(pred_depth, target_hw, interpolation=cv2.INTER_LINEAR)
+    gt_depth = resize_to(gt_depth, target_hw, interpolation=cv2.INTER_NEAREST)
+
+    pred_pointcloud = render_pointcloud_reproject(
+        pred_depth,
+        intrinsics,
+        rgb_u8,
+        rot_x_deg=args.pc_rot_x_deg,
+        rot_y_deg=args.pc_rot_y_deg,
+        knn_filter=not args.disable_pc_knn_filter,
+        knn_k=args.pc_knn_k,
+        knn_std_ratio=args.pc_knn_std_ratio,
+    )
+    gt_pointcloud = render_pointcloud_reproject(
+        gt_depth,
+        intrinsics,
+        rgb_u8,
+        rot_x_deg=args.pc_rot_x_deg,
+        rot_y_deg=args.pc_rot_y_deg,
+        knn_filter=False,
+    )
+
+    return image_grid(
+        [
+            rgb_u8,
+            colorize_depth(raw_depth, args.image_min, args.image_max),
+            colorize_depth(pred_depth, args.image_min, args.image_max),
+            colorize_depth(gt_depth, args.image_min, args.image_max),
+            pred_pointcloud,
+            gt_pointcloud,
+        ],
+        3,
+        2,
+    )
+
+
+def load_transpose_intrinsics_if_needed(args, dataset_kind):
+    if not args.save_vis or dataset_kind != "transpose":
+        return None
+
+    if not os.path.exists(args.intrinsics_path):
+        print(f"Error: Intrinsics path '{args.intrinsics_path}' does not exist")
+        sys.exit(1)
+    if args.pc_knn_k < 1:
+        print(f"Error: --pc-knn-k must be greater than 0, got {args.pc_knn_k}")
+        sys.exit(1)
+    if args.pc_knn_std_ratio < 0:
+        print(
+            "Error: --pc-knn-std-ratio must be non-negative, "
+            f"got {args.pc_knn_std_ratio}"
+        )
+        sys.exit(1)
+
+    return load_intrinsics(args.intrinsics_path)
+
+
 def inference(args):
     validate_inputs(args)
 
@@ -345,6 +628,7 @@ def inference(args):
     args.prediction_kind = "metric_depth_meters"
     args.uses_prompt_depth = True
 
+    transpose_intrinsics = load_transpose_intrinsics_if_needed(args, dataset_kind)
     model = load_model(args)
 
     with open(Path(args.output) / "args.json", "w", encoding="utf-8") as file:
@@ -360,21 +644,55 @@ def inference(args):
 
     dataset_label = dataset_kind.upper()
     for batch_items in tqdm(dataloader, desc=f"PromptDA {dataset_label} inference"):
-        rgb_paths, raw_depth_paths, gt_depth_paths = batch_items
-        for rgb_path, raw_depth_path, gt_depth_path in zip(
+        if len(batch_items) == 4:
+            rgb_paths, raw_depth_paths, gt_depth_paths, sample_names = batch_items
+        else:
+            rgb_paths, raw_depth_paths, gt_depth_paths = batch_items
+            sample_names = None
+
+        for sample_idx, (rgb_path, raw_depth_path, gt_depth_path) in enumerate(zip(
             rgb_paths, raw_depth_paths, gt_depth_paths
-        ):
+        )):
             rgb_path = str(rgb_path)
             raw_depth_path = str(raw_depth_path)
             gt_depth_path = str(gt_depth_path)
-            name = sample_name_for_dataset(dataset_kind, rgb_path)
+            if sample_names is None:
+                sample = (rgb_path, raw_depth_path, gt_depth_path)
+            else:
+                sample = (
+                    rgb_path,
+                    raw_depth_path,
+                    gt_depth_path,
+                    sample_names[sample_idx],
+                )
+            name = sample_name_for_sample(dataset_kind, sample)
 
-            pred, rgb_for_vis, prompt_depth = predict_depth(
+            pred, rgb_for_vis, prompt_depth, rgb_original_shape = predict_depth(
                 model, rgb_path, raw_depth_path, gt_depth_path, args
             )
             np.save(Path(args.prediction_dir) / f"{name}.npy", pred)
 
-            if args.save_vis:
+            if args.save_vis and dataset_kind == "transpose":
+                gt_depth_for_vis = load_depth_array(
+                    gt_depth_path, args.depth_scale, args.max_depth
+                )
+                scaled_intrinsics = scale_intrinsics(
+                    transpose_intrinsics,
+                    rgb_original_shape,
+                    rgb_for_vis.shape[:2],
+                )
+                grid_vis = create_transpose_visualization(
+                    rgb_for_vis,
+                    prompt_depth,
+                    pred,
+                    gt_depth_for_vis,
+                    scaled_intrinsics,
+                    args,
+                )
+                Image.fromarray(grid_vis).save(
+                    Path(args.visualization_dir) / f"{name}_grid_vis.jpg"
+                )
+            elif args.save_vis:
                 save_visualization(
                     Path(args.visualization_dir) / f"{name}_promptda_vis.jpg",
                     rgb_for_vis,

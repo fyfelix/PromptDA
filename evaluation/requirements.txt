@@ -2,3 +2,4 @@
 # Install after the repository-level requirements.txt.
 pandas
 loguru
+scipy
