@@ -12,7 +12,7 @@ evaluation/
 ├── run_hammer.sh
 ├── run_clearpose.sh
 ├── run_dreds.sh
-├── run_bs_transpose.sh
+├── run_transpose.sh
 ├── requirements.txt
 └── utils/
 ```
@@ -181,13 +181,13 @@ TRansPose 固定使用 `raw-type=l515`：
 DATASET_PATH=data/TRansPose/sequences/dc_testset.jsonl \
 INTRINSICS_PATH=data/TRansPose/sequences/intrinsics.txt \
 OUTPUT_DIR=/tmp/promptda_transpose_eval \
-bash evaluation/run_bs_transpose.sh /path/to/model.ckpt vitl l515 true
+bash evaluation/run_transpose.sh /path/to/model.ckpt vitl l515 false
 ```
 
 参数：
 
 ```text
-bash evaluation/run_bs_transpose.sh <checkpoint_or_hf_model_id> [encoder=vitl] [camera_type=l515] [cleanup_npy=true]
+bash evaluation/run_transpose.sh <checkpoint_or_hf_model_id> [encoder=vitl] [camera_type=l515] [cleanup_npy=false]
 ```
 
 说明：
@@ -195,8 +195,8 @@ bash evaluation/run_bs_transpose.sh <checkpoint_or_hf_model_id> [encoder=vitl] [
 - `camera_type` 只接受 `l515`。
 - 默认 JSONL 为 `data/TRansPose/sequences/dc_testset.jsonl`。
 - 默认 intrinsics 为 `data/TRansPose/sequences/intrinsics.txt`。
-- `SAVE_VIS=false` 时不要求 intrinsics 文件存在。
 - `SAVE_VIS=true` 时会生成 RGB、raw depth、prediction、GT depth、prediction point cloud、GT point cloud 的 3x2 网格可视化，并要求 intrinsics 文件有效。
+- `SAVE_VIS=false` 时不要求 intrinsics 文件存在。
 - TRansPose 保留 PromptDA 自己的模型加载、checkpoint 解析、prompt depth 预处理和 metric depth 输出链路，不使用 CDM 的 `RGBDDepth` 或 `model_registry.yaml`。
 
 默认输出目录：
@@ -214,10 +214,10 @@ DREDS_NOVEL_JSONL     DREDS catnovel JSONL 路径
 OUTPUT_DIR            单次运行输出目录
 OUTPUT_ROOT           DREDS all 模式的输出根目录
 INPUT_SIZE            PromptDA max RGB side length，默认 1008
-BATCH_SIZE            DataLoader path batch size；TRansPose wrapper 默认 16，其他 wrapper 默认 1
-NUM_WORKERS           DataLoader worker 数；TRansPose wrapper 默认 4，其他 wrapper 默认 0
+BATCH_SIZE            DataLoader path batch size，默认 1
+NUM_WORKERS           DataLoader worker 数，默认 0
 MAX_SAMPLES           最多运行样本数，0 表示全部
-SAVE_VIS              true 时保存可视化图；TRansPose 默认 false，其他 wrapper 默认 true
+SAVE_VIS              true 时保存可视化图，默认 true
 INTRINSICS_PATH       TRansPose 点云可视化 intrinsics 文件路径
 CLAMP_PREDICTION      true 时把 prediction clamp 到 dataset depth-range
 PYTHON_BIN            Python 可执行文件，默认 python3
